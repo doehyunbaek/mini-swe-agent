@@ -1,5 +1,6 @@
 """Basic agent class. See https://mini-swe-agent.com/latest/advanced/control_flow/ for visual explanation."""
 
+import logging
 import re
 import subprocess
 from collections.abc import Callable
@@ -55,6 +56,7 @@ class LimitsExceeded(TerminatingException):
 
 class DefaultAgent:
     def __init__(self, model: Model, env: Environment, *, config_class: Callable = AgentConfig, **kwargs):
+        self.logger = logging.getLogger("minisweagent.defaultagent")
         self.config = config_class(**kwargs)
         self.messages: list[dict] = []
         self.model = model
@@ -66,6 +68,7 @@ class DefaultAgent:
         return Template(template).render(**kwargs, **template_vars, **self.extra_template_vars)
 
     def add_message(self, role: str, content: str, **kwargs):
+        self.logger.debug(f"role: {role}, content: {content}")
         self.messages.append({"role": role, "content": content, **kwargs})
 
     def run(self, task: str, **kwargs) -> tuple[str, str]:
