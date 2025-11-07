@@ -10,6 +10,7 @@ from typing import Any
 @dataclass
 class DockerEnvironmentConfig:
     image: str
+    container_name: str
     cwd: str = "/"
     """Working directory in which to execute commands."""
     env: dict[str, str] = field(default_factory=dict)
@@ -48,7 +49,7 @@ class DockerEnvironment:
 
     def _start_container(self):
         """Start the Docker container and return the container ID."""
-        container_name = f"minisweagent-{uuid.uuid4().hex[:8]}"
+        container_name = self.config.container_name or f"minisweagent-{uuid.uuid4().hex[:8]}"
         cmd = [
             self.config.executable,
             "run",
