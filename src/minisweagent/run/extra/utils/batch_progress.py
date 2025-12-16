@@ -3,6 +3,7 @@ It's identical to the one used in swe-agent.
 """
 
 import collections
+import json
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -37,13 +38,15 @@ class RunBatchProgressManager:
     def __init__(
         self,
         num_instances: int,
-        yaml_report_path: Path | None = None,
+        report_path: Path | None = None,
+        metadata: dict | None = None,
     ):
         """This class manages a progress bar/UI for run-batch
 
         Args:
             num_instances: Number of task instances
-            yaml_report_path: Path to save a yaml report of the instances and their exit statuses
+            report_path: Path to save a report of the instances and their exit statuses
+            metadata: Metadata to include in the report
         """
 
         self._spinner_tasks: dict[str, TaskID] = {}
@@ -52,8 +55,10 @@ class RunBatchProgressManager:
         self._lock = Lock()
         self._start_time = time.time()
         self._total_instances = num_instances
+        self._metadata = metadata or {}
 
         self._instances_by_exit_status = collections.defaultdict(list)
+        self._instance_stats = {}
         self._main_progress_bar = Progress(
             SpinnerColumn(spinner_name="dots2"),
             TextColumn("[progress.description]{task.description} (${task.fields[total_cost]})"),
@@ -80,7 +85,7 @@ class RunBatchProgressManager:
         )
 
         self.render_group = Group(Table(), self._task_progress_bar, self._main_progress_bar)
-        self._yaml_report_path = yaml_report_path
+        self._report_path = report_path
 
     @property
     def n_completed(self) -> int:
@@ -142,8 +147,13 @@ class RunBatchProgressManager:
                 instance_id=instance_id,
             )
 
-    def on_instance_end(self, instance_id: str, exit_status: str | None) -> None:
+    def on_instance_end(self, instance_id: str, exit_status: str | None, stats: dict | None = None) -> None:
         self._instances_by_exit_status[exit_status].append(instance_id)
+        if stats is None:
+            stats = {}
+        final_stats = {"exit_status": exit_status}
+        final_stats.update(stats)
+        self._instance_stats[instance_id] = final_stats
         with self._lock:
             try:
                 self._task_progress_bar.remove_task(self._spinner_tasks[instance_id])
@@ -152,8 +162,8 @@ class RunBatchProgressManager:
             self._main_progress_bar.update(TaskID(0), advance=1, eta=self._get_eta_text())
         self.update_exit_status_table()
         self._update_total_costs()
-        if self._yaml_report_path is not None:
-            self._save_overview_data_yaml(self._yaml_report_path)
+        if self._report_path is not None:
+            self.save_report(self._report_path)
 
     def on_uncaught_exception(self, instance_id: str, exception: Exception) -> None:
         self.on_instance_end(instance_id, f"Uncaught {type(exception).__name__}")
@@ -167,12 +177,57 @@ class RunBatchProgressManager:
 
     def _get_overview_data(self) -> dict:
         """Get data like exit statuses, total costs, etc."""
+        total_full_repro = len(self._instances_by_exit_status.get("FULL_REPRO", [])) + len(
+            self._instances_by_exit_status.get("Success", [])
+        )
+        total_lastmile_repro = len(self._instances_by_exit_status.get("LASTMILE_REPRO", []))
+        total_copy_repro = len(self._instances_by_exit_status.get("COPY_REPRO", []))
+        total_mismatch_error = len(self._instances_by_exit_status.get("MISMATCH_ERROR", []))
+        total_runtime_error = len(self._instances_by_exit_status.get("RUNTIME_ERROR", []))
+        total_static_error = len(self._instances_by_exit_status.get("STATIC_ERROR", []))
+
+        agent_cost = 0.0
+        for stats in self._instance_stats.values():
+            agent_cost += stats.get("cost", 0.0)
+        format_cost = 0.0
+        for stats in self._instance_stats.values():
+            for fmt in stats.get("format", []):
+                format_cost += fmt.get("cost_usd", 0.0)
+        speedometer_cost = 0.0
+        for stats in self._instance_stats.values():
+            for spd in stats.get("speedometer", []):
+                speedometer_cost += spd.get("cost_usd", 0.0)
+        total_cost = agent_cost + format_cost + speedometer_cost
+        total_time = time.time() - self._start_time
+
+        n_completed = self.n_completed
+        cost_per_instance = total_cost / n_completed if n_completed > 0 else 0.0
+        time_per_instance = total_time / n_completed if n_completed > 0 else 0.0
+
         return {
-            # convert defaultdict to dict because of serialization
-            "instances_by_exit_status": dict(self._instances_by_exit_status),
+            "metadata": self._metadata,
+            "total": {
+                "total_full_repro": total_full_repro,
+                "total_lastmile_repro": total_lastmile_repro,
+                "total_copy_repro": total_copy_repro,
+                "total_mismatch_error": total_mismatch_error,
+                "total_runtime_error": total_runtime_error,
+                "total_static_error": total_static_error,
+                "total_cost": total_cost,
+                "format_cost": format_cost,
+                "speedometer_cost": speedometer_cost,
+                "total_time": total_time,
+                "cost_per_instance": cost_per_instance,
+                "time_per_instance": time_per_instance,
+            },
+            "instance": self._instance_stats,
         }
 
-    def _save_overview_data_yaml(self, path: Path) -> None:
-        """Save a yaml report of the instances and their exit statuses."""
+    def save_report(self, path: Path) -> None:
+        """Save a report of the instances and their exit statuses."""
+        data = self._get_overview_data()
         with self._lock:
-            path.write_text(yaml.dump(self._get_overview_data(), indent=4))
+            if path.suffix == ".json":
+                path.write_text(json.dumps(data, indent=4))
+            else:
+                path.write_text(yaml.dump(data, indent=4))
