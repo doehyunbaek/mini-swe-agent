@@ -2,6 +2,7 @@
 
 import re
 import subprocess
+import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 
@@ -80,7 +81,10 @@ class DefaultAgent:
             try:
                 self.step()
             except NonTerminatingException as e:
-                self.add_message("user", str(e))
+                kwargs = {}
+                if hasattr(e, "exec_time"):
+                    kwargs["exec_time"] = e.exec_time
+                self.add_message("user", str(e), **kwargs)
             except TerminatingException as e:
                 self.add_message("user", str(e))
                 return type(e).__name__, str(e)
@@ -101,7 +105,7 @@ class DefaultAgent:
         """Execute the action and return the observation."""
         output = self.execute_action(self.parse_action(response))
         observation = self.render_template(self.config.action_observation_template, output=output)
-        self.add_message("user", observation)
+        self.add_message("user", observation, exec_time=output.get("exec_time", 0.0))
         return output
 
     def parse_action(self, response: dict) -> dict:
@@ -112,15 +116,22 @@ class DefaultAgent:
         raise FormatError(self.render_template(self.config.format_error_template, actions=actions))
 
     def execute_action(self, action: dict) -> dict:
+        t0 = time.time()
         try:
             output = self.env.execute(action["action"])
         except subprocess.TimeoutExpired as e:
             output = e.output.decode("utf-8", errors="replace") if e.output else ""
-            raise ExecutionTimeoutError(
+            exc = ExecutionTimeoutError(
                 self.render_template(self.config.timeout_template, action=action, output=output)
             )
+            exc.exec_time = time.time() - t0
+            raise exc
         except TimeoutError:
-            raise ExecutionTimeoutError(self.render_template(self.config.timeout_template, action=action, output=""))
+            exc = ExecutionTimeoutError(self.render_template(self.config.timeout_template, action=action, output=""))
+            exc.exec_time = time.time() - t0
+            raise exc
+
+        output["exec_time"] = time.time() - t0
         self.has_finished(output)
         return output
 

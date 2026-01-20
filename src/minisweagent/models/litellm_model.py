@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -33,6 +34,7 @@ class LitellmModel:
     def __init__(self, *, config_class: type = LitellmModelConfig, **kwargs):
         self.config = config_class(**kwargs)
         self.cost = 0.0
+        self.time = 0.0
         self.n_calls = 0
         if self.config.litellm_model_registry and Path(self.config.litellm_model_registry).is_file():
             litellm.utils.register_model(json.loads(Path(self.config.litellm_model_registry).read_text()))
@@ -65,7 +67,12 @@ class LitellmModel:
     def query(self, messages: list[dict[str, str]], **kwargs) -> dict:
         if self.config.set_cache_control:
             messages = set_cache_control(messages, mode=self.config.set_cache_control)
+        
+        t0 = time.time()
         response = self._query(messages, **kwargs)
+        duration = time.time() - t0
+        self.time += duration
+        
         try:
             cost = litellm.cost_calculator.completion_cost(response)
         except Exception as e:
@@ -82,9 +89,10 @@ class LitellmModel:
         return {
             "content": response.choices[0].message.content or "",  # type: ignore
             "extra": {
+                "time": duration,
                 "response": response.model_dump(),
             },
         }
 
     def get_template_vars(self) -> dict[str, Any]:
-        return asdict(self.config) | {"n_model_calls": self.n_calls, "model_cost": self.cost}
+        return asdict(self.config) | {"n_model_calls": self.n_calls, "model_cost": self.cost, "model_time": self.time}

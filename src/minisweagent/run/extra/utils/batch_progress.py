@@ -189,6 +189,20 @@ class RunBatchProgressManager:
         agent_cost = 0.0
         for stats in self._instance_stats.values():
             agent_cost += stats.get("cost", 0.0)
+
+        total_time = 0.0
+        total_llm_time = 0.0
+        total_format_time = 0.0
+        total_llmjudge_time = 0.0
+        total_exec_time = 0.0
+
+        for stats in self._instance_stats.values():
+            total_time += stats.get("time", 0.0)
+            total_llm_time += stats.get("llm_time", 0.0)
+            total_format_time += stats.get("format_time", 0.0)
+            total_llmjudge_time += stats.get("llmjudge_time", 0.0)
+            total_exec_time += stats.get("exec_time", 0.0)
+
         format_cost = 0.0
         for stats in self._instance_stats.values():
             for fmt in stats.get("format", []):
@@ -198,7 +212,6 @@ class RunBatchProgressManager:
             for spd in stats.get("speedometer", []):
                 speedometer_cost += spd.get("cost_usd", 0.0)
         total_cost = agent_cost + format_cost + speedometer_cost
-        total_time = time.time() - self._start_time
 
         n_completed = self.n_completed
         cost_per_instance = total_cost / n_completed if n_completed > 0 else 0.0
@@ -217,6 +230,10 @@ class RunBatchProgressManager:
                 "format_cost": format_cost,
                 "speedometer_cost": speedometer_cost,
                 "total_time": total_time,
+                "total_llm_time": total_llm_time,
+                "total_format_time": total_format_time,
+                "total_llmjudge_time": total_llmjudge_time,
+                "total_exec_time": total_exec_time,
                 "cost_per_instance": cost_per_instance,
                 "time_per_instance": time_per_instance,
             },
